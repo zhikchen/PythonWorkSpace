@@ -1,0 +1,132 @@
+import pymysql.cursors
+import requests
+from pyquery import PyQuery as pq
+import re
+
+
+class Example(object):
+
+    def __init__(self, url, title, index):
+        self.url = url
+        self.title = title
+        self.index = index
+
+list = []
+def getOnePage(address=None):
+    '''
+    获取页面的内容
+    :return:返回页面
+    '''
+    response = requests.get("http://www.kekenet.com"+address)
+    print(address)
+    if response.status_code == 200:
+       return  response.content
+    else:
+        print("fail.......")
+        return None
+
+def getVideoId(content):
+    '''获取视频的id'''
+    try:
+        doc = pq(content.decode("utf-8"))
+        t_video = doc('#article_eng > div embed').attr('src')
+        matchObj = re.match(r'.*id=(\d*)&.*', t_video)
+        return matchObj.group(1)
+    except Exception:
+        print("没有视频....")
+        return None
+
+def getVideoAddress(id):
+    try:
+        resultJson = requests.get("http://my.tv.sohu.com/play/videonew.do?vid="+id)
+        return resultJson.json()['url']
+    except Exception:
+        return None
+
+def getMP3Address(address=None):
+    '''得到音频页面并获取音频地址，并返回'''
+    restfulObj = re.match("/video(.*)", address)
+    music = requests.get("http://www.kekenet.com/mp3"+restfulObj.group(1))
+    if music.status_code == 200:
+        doc = pq(music.content.decode("utf-8"))
+        '''这里有一个问题，选择器过长的话，就不能使用'''
+        return doc('tr:nth-child(4) > td > a').attr('href')
+    return None
+
+def getMP3(address, name=None):
+    '''得到mp3地址后下载mp3'''
+    response = requests.get(address)
+    if response.status_code == 200:
+        with open(name+'.mp3', 'wb') as f:
+            f.write(response.content)
+
+def parseOnePage(content, address, name):
+    '''解析html页面'''
+    doc = pq(content.decode("utf-8"))
+    '''获取标题'''
+    t_title = doc('#nrtitle').text()
+    t_videoaddress = getVideoAddress(getVideoId(content))
+    '''获取句子'''
+    t_content = doc('#article_eng > div').text().replace("'", "\\'")
+    t_content  = t_content.replace("-", "\\-")
+    '''下载音频文件'''
+    getMP3(getMP3Address(address), name)
+    '''获取单词的东西，这里先不写...'''
+    table = {
+        'id' : name,
+        'title': t_title,
+        'address': t_videoaddress,
+        'content': t_content
+    }
+    return table
+
+def connectMysql():
+    '''连接数据库，并返回连接'''
+    return pymysql.connect(host='localhost', user='root', password='root', database='spider', charset='utf8')
+
+
+def insertToMysql(connection, table):
+    '''爬取的数据插入mysql数据库中'''
+    coursor = connection.cursor()
+    if table['address'] is None:
+        table['address'] = '视频已经被删除了！！'
+    coursor.execute("insert into t_english(id, title, address, content) values('"+table['id']+"','"+table['title']+"','"+table['address']+"','"+table['content']+"')")
+    connection.commit()
+    closeConnecion(connection, coursor)
+
+def closeConnecion(connection,coursor):
+    '''关闭数据库，关闭发送语句'''
+    if coursor is not None:
+        coursor.close()
+    if connection is not None:
+        connection.close()
+    pass
+
+def getUrl():
+    '''获取URL地址,将其放入list数组中'''
+    response = requests.get("http://www.kekenet.com/video/201810/569014.shtml")
+    if response.status_code == 200:
+        text = response.content.decode("utf-8")
+        doc = pq(text)
+        items = doc("div[class=qihao_btn]").items()
+        for item in items:
+            restfulObj = re.match(".*href=\"(.*)\" aid.*title=\"(.*)\">第(.*)期.*", str(item))
+            list.append(Example(restfulObj.group(1), restfulObj.group(2), restfulObj.group(3)))
+
+def main():
+    getUrl()
+    print(len(list))
+    for i in range(len(list)):
+        print(i)
+        # if int(list[i].index) >= 880:
+        #    continue
+        connection = connectMysql()
+        address = list[i].url
+        name = list[i].index
+        page = getOnePage(address)
+        table = parseOnePage(page, address, name)
+        insertToMysql(connection, table)
+    pass
+
+if __name__ == "__main__":
+    main()
